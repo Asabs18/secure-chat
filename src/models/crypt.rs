@@ -15,10 +15,11 @@ pub struct CryptEngine {
 }
 
 impl CryptEngine {
-    /// Create a new encryption engine with shared key
+    /// Create a new encryption engine with shared key (legacy method)
     /// 
-    /// Note: Currently uses a hardcoded shared key for simplicity
-    /// Production systems should implement proper key exchange (Diffie-Hellman, etc.)
+    /// Note: This is deprecated in favor of from_shared_secret()
+    /// Only used for backwards compatibility
+    #[allow(dead_code)]
     pub fn new() -> Self {
         // Use a shared hardcoded key so all instances can decrypt each other's messages
         // In production, implement proper key exchange (Diffie-Hellman, etc.)
@@ -32,6 +33,18 @@ impl CryptEngine {
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
         
+        Self { cipher }
+    }
+
+    /// Create encryption engine from shared secret (ECDH result)
+    /// This is the proper way to initialize encryption after key exchange
+    /// 
+    /// # Arguments
+    /// * `shared_secret` - 32-byte shared secret from ECDH key exchange
+    pub fn from_shared_secret(shared_secret: &[u8; 32]) -> Self {
+        println!("🔍 DEBUG CryptEngine: Initializing with key: {}", hex::encode(shared_secret));
+        let key = Key::<Aes256Gcm>::from_slice(shared_secret);
+        let cipher = Aes256Gcm::new(key);
         Self { cipher }
     }
 
@@ -91,6 +104,7 @@ impl CryptEngine {
     /// - Extracts nonce from first 12 bytes
     /// - GCM authentication will fail if data was tampered with
     pub fn decrypt(&self, encrypted_data: &[u8]) -> Result<String, String> {
+        println!("🔍 DEBUG Decrypt: Received {} bytes", encrypted_data.len());
         if encrypted_data.len() < 12 {
             return Err("Invalid encrypted data".to_string());
         }
@@ -99,10 +113,16 @@ impl CryptEngine {
         let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
         let nonce = Nonce::from_slice(nonce_bytes);
         
+        println!("🔍 DEBUG Decrypt: Nonce: {}", hex::encode(nonce_bytes));
+        println!("🔍 DEBUG Decrypt: Ciphertext: {}", hex::encode(ciphertext));
+        
         // Decrypt
         let plaintext_bytes = self.cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
+            .map_err(|e| {
+                println!("❌ DEBUG Decrypt FAILED: {}", e);
+                format!("Decryption failed: {}", e)
+            })?;
         
         String::from_utf8(plaintext_bytes)
             .map_err(|e| format!("Invalid UTF-8: {}", e))

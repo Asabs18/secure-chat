@@ -11,6 +11,8 @@ pub struct Message {
     pub encrypted: Vec<u8>,    // Encrypted message data (AES-256-GCM)
     pub timestamp: i64,        // Unix timestamp when message was created
     pub sender_id: String,     // Username of the sender
+    #[serde(skip)]
+    pub decrypted: Option<String>, // Cached decrypted plaintext (not serialized)
 }
 
 impl Message {
@@ -27,6 +29,7 @@ impl Message {
             encrypted,
             timestamp: chrono::Utc::now().timestamp(),
             sender_id,
+            decrypted: None, // Will be populated on first decrypt
         }
     }
 }

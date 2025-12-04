@@ -7,14 +7,20 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+use crate::models::keyexchange::KeyExchangeMessage;
 
-/// Network message structure for transmission
-/// Contains encrypted data and metadata
+/// Network message types
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NetworkMessage {
-    pub encrypted_data: Vec<u8>,  // Encrypted message bytes
-    pub sender_id: String,        // Username of sender
-    pub timestamp: i64,           // Unix timestamp
+#[serde(tag = "type")]
+pub enum NetworkMessage {
+    /// Key exchange initiation message
+    KeyExchange(KeyExchangeMessage),
+    /// Encrypted chat message
+    EncryptedMessage {
+        encrypted_data: Vec<u8>,
+        sender_id: String,
+        timestamp: i64,
+    },
 }
 
 /// Network manager handling TCP client and server operations

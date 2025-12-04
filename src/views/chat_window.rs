@@ -24,16 +24,49 @@ impl ChatWindow {
                 ui.label(RichText::new(format!("👤 User: {}", app.username)).strong());
                 ui.separator();
                 ui.label(RichText::new(format!("📡 Listening on port: {}", app.local_port)).color(Color32::GREEN));
+                ui.separator();
+                
+                // Key exchange status
+                if app.key_established {
+                    ui.label(RichText::new("🔐 Encrypted").color(Color32::GREEN).strong());
+                    if let Some(peer) = &app.peer_username {
+                        ui.label(RichText::new(format!("with {}", peer)).color(Color32::LIGHT_GREEN));
+                    }
+                } else {
+                    ui.label(RichText::new("⚠️ Not Encrypted").color(Color32::YELLOW).strong());
+                }
             });
             
             ui.separator();
             
-            // Target address configuration
+            // Target address and key exchange controls
             ui.horizontal(|ui| {
                 ui.label("Send to:");
                 ui.text_edit_singleline(&mut app.target_address);
                 ui.label("(format: IP:PORT)");
+                
+                ui.separator();
+                
+                // Key exchange button
+                if !app.key_established {
+                    if ui.button("🔑 Initiate Key Exchange").clicked() {
+                        app.initiate_key_exchange();
+                    }
+                } else {
+                    ui.label(RichText::new("✓ Key Established").color(Color32::GREEN));
+                }
             });
+            
+            // Show fingerprints for verification
+            if app.key_established {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Your fingerprint: {}", app.fingerprint)).small().monospace());
+                    if let Some(peer_fp) = &app.peer_fingerprint {
+                        ui.separator();
+                        ui.label(RichText::new(format!("Peer fingerprint: {}", peer_fp)).small().monospace());
+                    }
+                });
+            }
             
             ui.separator();
             
@@ -62,9 +95,8 @@ impl ChatWindow {
                                         let sender_color = if is_own { Color32::LIGHT_GREEN } else { Color32::LIGHT_BLUE };
                                         ui.label(RichText::new(&msg.sender_id).color(sender_color).strong());
                                         
-                                        // Decrypted message content
-                                        let decrypted = app.decrypt_message(&msg.encrypted);
-                                        ui.label(&decrypted);
+                                        // Display cached decrypted message
+                                        ui.label(msg.decrypted.as_ref().unwrap_or(&"[Decryption Failed]".to_string()));
                                         
                                         // Timestamp
                                         let time = chrono::DateTime::from_timestamp(msg.timestamp, 0)
@@ -108,7 +140,11 @@ impl ChatWindow {
             ui.separator();
             
             // Security notice footer
-            ui.label(RichText::new("🔒 All messages are encrypted with AES-256-GCM before transmission").small().weak());
+            if app.key_established {
+                ui.label(RichText::new("🔒 All messages encrypted with AES-256-GCM using ECDH-derived keys").small().weak());
+            } else {
+                ui.label(RichText::new("⚠️ Click 'Initiate Key Exchange' to establish secure channel before sending messages").small().color(Color32::YELLOW));
+            }
         });
     }
 }
