@@ -1,0 +1,70 @@
+# Cargo build artifacts
+/target/
+**/target/
+
+# Cargo.lock should be committed for binaries, ignored for libraries
+# Uncomment the next line if you're building a library
+# Cargo.lock
+
+# Backup files
+**/*.rs.bk
+*.pdb
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Rust Analyzer
+.rust-analyzer/
+
+# Environment variables
+.env
+.env.local
+
+# Code coverage
+*.profraw
+*.profdata
+lcov.info
+coverage/
+tarpaulin-report.html
+
+# Flamegraph profiling
+flamegraph.svg
+perf.data
+perf.data.old
+
+# Documentation build
+/doc/
+
+# Memory dumps and crash reports
+core
+*.dmp
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+.Trash-*
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Benchmarking
+criterion/
+
+# Generated files from build scripts
+/build/
