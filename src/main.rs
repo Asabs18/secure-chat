@@ -4,18 +4,20 @@
 mod models;
 mod views;
 mod controllers;
+mod utils;
 
 use controllers::app::ChatApp;
 use std::env;
+use utils::port::find_available_port;
 
 fn main() -> eframe::Result<()> {
     // Parse command line arguments for port and username configuration
     let args: Vec<String> = env::args().collect();
     
-    // First argument: Local listening port (default: 3000)
+    // First argument: Local listening port (default: auto-select)
     let port = args.get(1)
         .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(3000);
+        .unwrap_or_else(|| find_available_port());
     
     // Second argument: Username for display (default: User_[PORT])
     let username = args.get(2)
@@ -23,8 +25,10 @@ fn main() -> eframe::Result<()> {
         .unwrap_or_else(|| format!("User_{}", port));
     
     // Display startup information
-    println!("Starting Secure Chat on port {} as '{}'", port, username);
-    println!("Usage: secure-chat [PORT] [USERNAME]");
+    println!("🚀 Starting Secure Chat on port {} as '{}'", port, username);
+    println!("💡 Usage: secure-chat [PORT] [USERNAME]");
+    println!("   (Both arguments optional - port auto-selected if not specified)");
+    println!();
     
     // Configure the native window options
     let options = eframe::NativeOptions {

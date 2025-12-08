@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use x25519_dalek::PublicKey as X25519PublicKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Sha256, Digest};
+use crate::models::identity::Identity;
 
 // X25519 base point for scalar multiplication
 const X25519_BASEPOINT_BYTES: [u8; 32] = [
@@ -21,6 +22,7 @@ pub struct KeyExchangeMessage {
     #[serde(with = "serde_arrays")]
     pub signature: [u8; 64],            // Ed25519 signature of DH public key
     pub username: String,                // User identifier
+    pub listening_port: u16,             // Port this peer is listening on
 }
 
 // Helper module for serializing large arrays
@@ -60,17 +62,18 @@ pub struct KeyExchangeManager {
 }
 
 impl KeyExchangeManager {
-    /// Create a new key exchange manager with generated keys
+    /// Create a new key exchange manager with persistent identity
     /// 
     /// # Arguments
     /// * `username` - Username for this user
+    /// * `identity` - Persistent identity (loaded from disk)
     /// 
     /// # Returns
-    /// New KeyExchangeManager with fresh key pairs
-    pub fn new(username: String) -> Self {
-        // Generate long-term identity key pair (Ed25519)
-        let identity_signing_key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
-        let identity_verifying_key = identity_signing_key.verifying_key();
+    /// New KeyExchangeManager with persistent identity and ephemeral DH keys
+    pub fn new(username: String, identity: &Identity) -> Self {
+        // Use persistent identity key pair (Ed25519)
+        let identity_signing_key = identity.signing_key.clone();
+        let identity_verifying_key = identity.verifying_key;
         
         // Generate ephemeral DH key pair (X25519)
         // Secret: random 32 bytes, Public: x25519(secret, basepoint)
@@ -93,7 +96,7 @@ impl KeyExchangeManager {
     /// 
     /// # Returns
     /// KeyExchangeMessage ready for transmission
-    pub fn create_exchange_message(&self) -> KeyExchangeMessage {
+    pub fn create_exchange_message(&self, listening_port: u16) -> KeyExchangeMessage {
         let dh_public_bytes = self.dh_public.to_bytes();
         
         // Sign the DH public key with identity key to prove it's ours
@@ -104,6 +107,7 @@ impl KeyExchangeManager {
             identity_public_key: self.identity_verifying_key.to_bytes(),
             signature: signature.to_bytes(),
             username: self.username.clone(),
+            listening_port,
         }
     }
     
@@ -164,20 +168,5 @@ impl KeyExchangeManager {
         self.shared_secret = Some(key);
         
         Ok(key)
-    }
-    
-    /// Get the identity fingerprint for display/verification
-    /// Users can compare fingerprints out-of-band to detect MITM
-    /// 
-    /// # Returns
-    /// Hex-encoded fingerprint of identity public key
-    pub fn get_fingerprint(&self) -> String {
-        let identity_bytes = self.identity_verifying_key.to_bytes();
-        let mut hasher = Sha256::new();
-        hasher.update(identity_bytes);
-        let hash = hasher.finalize();
-        
-        // Return first 16 bytes as hex (128-bit fingerprint)
-        hex::encode(&hash[..16]).to_uppercase()
     }
 }

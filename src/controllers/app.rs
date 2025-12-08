@@ -6,6 +6,9 @@ use crate::models::{
     message::Message, 
     network::{NetworkManager, NetworkMessage},
     keyexchange::{KeyExchangeManager, KeyExchangeMessage},
+    identity::Identity,
+    contacts::{ContactList, Contact},
+    discovery::PeerDiscovery,
 };
 use crate::views::chat_window::ChatWindow;
 use sha2::Digest;
@@ -25,6 +28,11 @@ pub struct ChatApp {
     pub peer_username: Option<String>, // Connected peer's username
     pub fingerprint: String,           // This user's identity fingerprint
     pub peer_fingerprint: Option<String>, // Peer's identity fingerprint
+    #[allow(dead_code)]  // Used during initialization for fingerprint
+    pub identity: Identity,            // Persistent identity (loaded from disk)
+    pub contacts: ContactList,         // Contact list
+    pub discovery: Option<PeerDiscovery>, // Peer discovery service
+    pub auto_connect_attempted: bool,  // Track if we already tried auto-connect
 }
 
 impl ChatApp {
@@ -34,8 +42,28 @@ impl ChatApp {
     /// * `port` - Local port to listen on for incoming messages
     /// * `username` - Display name for this user
     pub fn new(port: u16, username: String) -> Self {
-        let key_exchange = KeyExchangeManager::new(username.clone());
-        let fingerprint = key_exchange.get_fingerprint();
+        // Load or create persistent identity
+        let identity = Identity::load_or_create()
+            .expect("Failed to load/create identity");
+        
+        // Load or create contact list
+        let contacts = ContactList::load_or_create()
+            .expect("Failed to load/create contacts");
+        
+        let key_exchange = KeyExchangeManager::new(username.clone(), &identity);
+        let fingerprint = identity.fingerprint.clone();
+        
+        // Start peer discovery service
+        let discovery = match PeerDiscovery::new(port, username.clone()) {
+            Ok(d) => {
+                println!("✅ Peer discovery enabled");
+                Some(d)
+            }
+            Err(e) => {
+                eprintln!("⚠️  Peer discovery disabled: {}", e);
+                None
+            }
+        };
         
         Self {
             crypto: None,  // Will be set after key exchange
@@ -50,14 +78,21 @@ impl ChatApp {
             peer_username: None,
             fingerprint,
             peer_fingerprint: None,
+            identity,
+            contacts,
+            discovery,
+            auto_connect_attempted: false,
         }
     }
     
     /// Initiate key exchange with peer
     /// Sends our public key and identity to establish secure channel
     pub fn initiate_key_exchange(&mut self) {
-        let exchange_msg = self.key_exchange.create_exchange_message();
-        let network_msg = NetworkMessage::KeyExchange(exchange_msg);
+        let exchange_msg = self.key_exchange.create_exchange_message(self.local_port);
+        let network_msg = NetworkMessage::KeyExchange {
+            message: exchange_msg,
+            sender_address: None,  // Will be filled by receiver
+        };
         self.network.send_message(self.target_address.clone(), network_msg);
     }
     
@@ -108,7 +143,17 @@ impl ChatApp {
         // Non-blocking check for new messages
         while let Ok(network_msg) = self.network.incoming_rx.try_recv() {
             match network_msg {
-                NetworkMessage::KeyExchange(key_msg) => {
+                NetworkMessage::KeyExchange { message: key_msg, sender_address } => {
+                    // Set target_address from the peer's listening port (not the ephemeral connection port)
+                    if self.target_address == "127.0.0.1:3001" {
+                        if let Some(addr) = sender_address {
+                            // Extract IP from the socket address and combine with peer's listening port
+                            if let Some(ip) = addr.split(':').next() {
+                                self.target_address = format!("{}:{}", ip, key_msg.listening_port);
+                                println!("📍 Set target address to: {}", self.target_address);
+                            }
+                        }
+                    }
                     // Process key exchange message
                     self.handle_key_exchange(key_msg);
                 }
@@ -139,19 +184,46 @@ impl ChatApp {
                 let mut hasher = sha2::Sha256::new();
                 hasher.update(peer_message.identity_public_key);
                 let hash = hasher.finalize();
-                self.peer_fingerprint = Some(hex::encode(&hash[..8]).to_uppercase());
+                let peer_fp = hex::encode(&hash[..8]).to_uppercase();
+                self.peer_fingerprint = Some(peer_fp.clone());
                 
                 println!("✅ Secure channel established with {}", peer_message.username);
                 println!("🔑 Your fingerprint: {}", self.fingerprint);
-                if let Some(peer_fp) = &self.peer_fingerprint {
-                    println!("🔑 Peer fingerprint: {}", peer_fp);
+                println!("🔑 Peer fingerprint: {}", peer_fp);
+                
+                // Check if this is a known contact
+                if let Some(existing_contact) = self.contacts.get_contact(&peer_message.username) {
+                    // Verify fingerprint matches
+                    if existing_contact.fingerprint != peer_fp {
+                        println!("⚠️  WARNING: Fingerprint mismatch for {}!", peer_message.username);
+                        println!("   Expected: {}", existing_contact.fingerprint);
+                        println!("   Received: {}", peer_fp);
+                        println!("   Possible MITM attack or identity changed!");
+                    } else {
+                        println!("✅ Contact verified: {} (fingerprint matches)", peer_message.username);
+                        self.contacts.update_last_connected(&peer_message.username);
+                    }
+                } else {
+                    // New contact - save it
+                    println!("📇 New contact: {} - saving to contact list", peer_message.username);
+                    let contact = Contact {
+                        username: peer_message.username.clone(),
+                        address: self.target_address.clone(),
+                        fingerprint: peer_fp,
+                        last_connected: Some(chrono::Utc::now().timestamp()),
+                        notes: String::new(),
+                    };
+                    self.contacts.add_contact(contact);
                 }
                 
                 // If we haven't established our side yet, send our key exchange
                 if !self.key_established {
                     println!("📤 Sending key exchange response...");
-                    let exchange_msg = self.key_exchange.create_exchange_message();
-                    let network_msg = NetworkMessage::KeyExchange(exchange_msg);
+                    let exchange_msg = self.key_exchange.create_exchange_message(self.local_port);
+                    let network_msg = NetworkMessage::KeyExchange {
+                        message: exchange_msg,
+                        sender_address: None,
+                    };
                     self.network.send_message(self.target_address.clone(), network_msg);
                 }
                 
@@ -179,6 +251,35 @@ impl ChatApp {
             None => "[No Encryption Key]".to_string(),
         }
     }
+    
+    /// Check for discovered peers and auto-connect
+    pub fn check_peer_discovery(&mut self) {
+        // Only auto-connect once and only if not already connected
+        if self.key_established || self.auto_connect_attempted {
+            return;
+        }
+        
+        // Check for discovered peers
+        if let Some(discovery) = &self.discovery {
+            if let Some(peer) = discovery.check_for_peers() {
+                // Don't connect to ourselves
+                if peer.port != self.local_port {
+                    println!("🤝 Auto-connecting to {} at {}...", peer.username, peer.address);
+                    
+                    // Set target address
+                    self.target_address = peer.address.clone();
+                    
+                    // Initiate key exchange
+                    self.initiate_key_exchange();
+                    
+                    // Mark that we attempted auto-connect
+                    self.auto_connect_attempted = true;
+                } else {
+                    println!("🔍 Ignoring own service (port {})", peer.port);
+                }
+            }
+        }
+    }
 }
 
 /// Implement the eframe App trait for GUI rendering
@@ -187,6 +288,9 @@ impl eframe::App for ChatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Check for new incoming messages
         self.check_incoming_messages();
+        
+        // Check for discovered peers and auto-connect
+        self.check_peer_discovery();
         
         // Render the chat window UI
         ChatWindow::render(ctx, self);

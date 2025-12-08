@@ -13,8 +13,13 @@ use crate::models::keyexchange::KeyExchangeMessage;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NetworkMessage {
-    /// Key exchange initiation message
-    KeyExchange(KeyExchangeMessage),
+    /// Key exchange initiation message with optional sender address
+    KeyExchange {
+        #[serde(flatten)]
+        message: KeyExchangeMessage,
+        #[serde(skip)]
+        sender_address: Option<String>,
+    },
     /// Encrypted chat message
     EncryptedMessage {
         encrypted_data: Vec<u8>,
@@ -80,10 +85,11 @@ impl NetworkManager {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
+                    let peer_addr = stream.peer_addr().ok().map(|addr| addr.to_string());
                     let tx = tx.clone();
                     // Spawn handler thread for each connection
                     thread::spawn(move || {
-                        Self::handle_client(&mut stream, tx);
+                        Self::handle_client(&mut stream, tx, peer_addr);
                     });
                 }
                 Err(e) => eprintln!("Connection failed: {}", e),
@@ -97,7 +103,8 @@ impl NetworkManager {
     /// # Arguments
     /// * `stream` - TCP stream for this connection
     /// * `tx` - Channel sender for incoming messages
-    fn handle_client(stream: &mut TcpStream, tx: Sender<NetworkMessage>) {
+    /// * `peer_addr` - Optional peer address string
+    fn handle_client(stream: &mut TcpStream, tx: Sender<NetworkMessage>, peer_addr: Option<String>) {
         let mut buffer = vec![0u8; 8192];  // 8KB buffer for incoming data
         
         loop {
@@ -105,7 +112,11 @@ impl NetworkManager {
                 Ok(0) => break, // Connection closed
                 Ok(n) => {
                     // Deserialize JSON message
-                    if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(&buffer[..n]) {
+                    if let Ok(mut msg) = serde_json::from_slice::<NetworkMessage>(&buffer[..n]) {
+                        // Add sender address to KeyExchange messages
+                        if let NetworkMessage::KeyExchange { ref mut sender_address, .. } = msg {
+                            *sender_address = peer_addr.clone();
+                        }
                         let _ = tx.send(msg);
                     }
                 }
